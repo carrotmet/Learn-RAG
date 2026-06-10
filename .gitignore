@@ -1,0 +1,66 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+nohup.out
+
+# Environment variables
+.env
+!.env.example
+
+# Node
+node_modules/
+dist/
+
+# ChromaDB
+chroma_db/
+
+# Uploads
+uploads/
+
+# Project specific
+.clawhub/
+.openclaw/
+
+# LangGraph runtime
+backend/.langgraph_api/
+
+# Large documents (sample only, user uploads their own)
+docs/*.pdf
