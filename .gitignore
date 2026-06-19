@@ -64,3 +64,28 @@ backend/.langgraph_api/
 
 # Large documents (sample only, user uploads their own)
 docs/*.pdf
+
+# Runtime data
+data/
+backend/data/
+backend/reports/
+backend/.cron_status.md
+backend/.langgraph_api/
+
+# Local memory
+memory/
+
+# Temporary scripts
+docs/index_tr15.sh
+
+# Runtime data
+data/
+backend/data/
+backend/reports/
+backend/.cron_status.md
+
+# Local memory
+memory/
+
+# Temporary scripts
+docs/index_tr15.sh

@@ -12,13 +12,13 @@ except ImportError:
 
 class FakeEmbeddings:
     """本地假嵌入模型，用于无网络环境测试"""
-    def __init__(self, dim: int = 384):
+    def __init__(self, dim: int = 2048):
         self.dim = dim
     
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
         import hashlib
         return [
-            [float(int(hashlib.md5(t.encode()).hexdigest(), 16) % 10000) / 10000.0 for _ in range(self.dim)]
+            [float(int(hashlib.md5((t + str(i)).encode()).hexdigest(), 16) % 10000) / 10000.0 for i in range(self.dim)]
             for t in texts
         ]
     
@@ -72,8 +72,8 @@ class VectorStore:
         self.persist_dir = persist_dir or os.getenv("CHROMA_DB_PATH", "./chroma_db")
         
         # 嵌入模型配置（优先级：环境变量 > 配置文件 > 默认）
-        embedding_provider = os.getenv("EMBEDDING_PROVIDER", "openrouter").lower()
-        embedding_model = os.getenv("EMBEDDING_MODEL", "nvidia/llama-nemotron-embed-vl-1b-v2:free")
+        embedding_provider = os.getenv("EMBEDDING_PROVIDER", "fake").lower()
+        embedding_model = os.getenv("EMBEDDING_MODEL", "fake")
         
         if embedding_provider == "openrouter":
             # OpenRouter 在线嵌入模型（使用自定义封装，绕过 langchain-openai 兼容性问题）
