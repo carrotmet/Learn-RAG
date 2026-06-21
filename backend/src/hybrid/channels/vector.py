@@ -31,12 +31,32 @@ class VectorChannel:
 
     def _load_embedding(self):
         """加载嵌入模型（复用第一阶段逻辑）"""
+        # 先加载 .env 文件（确保环境变量可用）
+        try:
+            from dotenv import load_dotenv
+            # 尝试从项目根目录加载 .env
+            project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+            env_path = os.path.join(project_root, ".env")
+            if os.path.exists(env_path):
+                load_dotenv(env_path)
+            else:
+                load_dotenv()
+        except ImportError:
+            pass
+        
         # 尝试使用 OpenRouter 在线嵌入
         try:
             from agent.vector_store import OpenRouterEmbeddings
-            return OpenRouterEmbeddings()
-        except Exception:
-            pass
+            # 读取环境变量配置
+            model = os.getenv("EMBEDDING_MODEL", "nvidia/llama-nemotron-embed-vl-1b-v2:free")
+            api_key = os.getenv("OPENROUTER_API_KEY")
+            if api_key:
+                print(f"[VectorChannel] 使用 OpenRouter 嵌入: {model}")
+                return OpenRouterEmbeddings(model=model, api_key=api_key)
+            else:
+                print("[VectorChannel] OPENROUTER_API_KEY 未设置，跳过 OpenRouter")
+        except Exception as e:
+            print(f"[VectorChannel] OpenRouterEmbeddings 初始化失败: {e}")
         
         # fallback: 使用 FakeEmbeddings（测试用）
         try:
