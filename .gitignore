@@ -51,6 +51,7 @@ dist/
 
 # ChromaDB
 chroma_db/
+chroma_db_hybrid/
 
 # Uploads
 uploads/
