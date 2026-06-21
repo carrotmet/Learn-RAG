@@ -453,3 +453,321 @@ async def evaluate_all_testsets(data: dict = Body(...)):
         return JSONResponse({"status": "ok", "results": results})
     except Exception as e:
         return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
+
+# ========== 第十章~第十一章：HybridRAG API 接口 ==========
+
+import json
+from pydantic import BaseModel
+from typing import Optional, List
+
+# HybridRAG 模块导入（用于 API）
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+from hybrid.document_store import DocumentStore
+from hybrid.retrieval.enrich import Enrich
+from hybrid.retrieval.intent import IntentRouter
+from hybrid.retrieval.multi_recall import MultiRecall
+from hybrid.retrieval.fusion import Fusion
+from hybrid.channels.vector import VectorChannel
+from hybrid.channels.fts import FTSChannel
+from hybrid.channels.graph import GraphChannel
+
+# 全局 HybridRAG 实例（使用正式数据库）
+_hybrid_db_path = os.path.join(os.path.dirname(__file__), '..', '..', '..', 'data', 'rag_data.db')
+_hybrid_store = DocumentStore(db_path=_hybrid_db_path)
+_hybrid_enrich = Enrich()
+_hybrid_intent = IntentRouter()
+_hybrid_recall = MultiRecall(
+    _hybrid_store,
+    vector=VectorChannel(),
+    fts=FTSChannel(),
+    graph=GraphChannel()
+)
+
+
+class EnrichRequest(BaseModel):
+    query: str
+
+
+class EnrichResponse(BaseModel):
+    status: str
+    complete: bool
+    reason: Optional[str] = None
+    rewritten: Optional[str] = None
+    follow_up: Optional[str] = None
+
+
+@app.post("/api/hybrid/enrich", response_model=EnrichResponse)
+async def api_hybrid_enrich(data: EnrichRequest):
+    """第十一章：问题完善 API"""
+    try:
+        result = _hybrid_enrich.check_completeness(data.query)
+        return EnrichResponse(
+            status="ok",
+            complete=result.get("complete", True),
+            reason=result.get("reason"),
+            rewritten=result.get("rewritten_query"),
+            follow_up=result.get("follow_up_question")
+        )
+    except Exception as e:
+        return JSONResponse(
+            {"status": "error", "message": str(e)},
+            status_code=500
+        )
+
+
+class IntentRequest(BaseModel):
+    query: str
+
+
+class IntentResponse(BaseModel):
+    status: str
+    intents: List[dict]
+    primary_intent: Optional[str] = None
+    needs_retrieve: bool = True
+    retrieve_config: Optional[dict] = None
+
+
+@app.post("/api/hybrid/intent", response_model=IntentResponse)
+async def api_hybrid_intent(data: IntentRequest):
+    """第十一章：意图识别 API"""
+    try:
+        result = _hybrid_intent.recognize(data.query)
+        intents = result.get("intents", [])
+        needs_retrieve = result.get("needs_retrieve", True)
+        
+        retrieve_config = None
+        if needs_retrieve and intents:
+            retrieve_config = IntentRouter.get_retrieve_config(intents)
+        
+        return IntentResponse(
+            status="ok",
+            intents=intents,
+            primary_intent=result.get("primary_intent"),
+            needs_retrieve=needs_retrieve,
+            retrieve_config=retrieve_config
+        )
+    except Exception as e:
+        return JSONResponse(
+            {"status": "error", "message": str(e)},
+            status_code=500
+        )
+
+
+class RecallRequest(BaseModel):
+    query: str
+    strategies: Optional[List[str]] = None
+    channels: Optional[List[str]] = None
+    mode: Optional[str] = "hybrid"
+    k: Optional[int] = 5
+
+
+class RecallResponse(BaseModel):
+    status: str
+    query: str
+    recall_results: dict
+    total_results: int
+
+
+@app.post("/api/hybrid/recall", response_model=RecallResponse)
+async def api_hybrid_recall(data: RecallRequest):
+    """第十一章：多路召回调试 API"""
+    try:
+        strategies = data.strategies or ["standard"]
+        channels = data.channels or ["vector", "fts", "graph"]
+        
+        results = _hybrid_recall.recall(
+            data.query,
+            strategies=strategies,
+            channels=channels,
+            
+            k=data.k
+        )
+        
+        total = sum(len(v) for v in results.values())
+        
+        return RecallResponse(
+            status="ok",
+            query=data.query,
+            recall_results=results,
+            total_results=total
+        )
+    except Exception as e:
+        return JSONResponse(
+            {"status": "error", "message": str(e)},
+            status_code=500
+        )
+
+
+class HybridGenerateRequest(BaseModel):
+    query: str
+    strategies: Optional[List[str]] = None
+    mode: Optional[str] = "hybrid"
+    k: Optional[int] = 5
+
+
+@app.post("/api/hybrid/generate")
+async def api_hybrid_generate(data: HybridGenerateRequest):
+    """第十一章：HybridRAG 端到端生成 API"""
+    try:
+        # 1. Enrich
+        enrich_result = _hybrid_enrich.check_completeness(data.query)
+        if not enrich_result.get("complete", True):
+            return JSONResponse({
+                "status": "incomplete",
+                "follow_up": enrich_result.get("follow_up_question", "您的问题似乎不完整，请补充更多信息。"),
+                "enrich": enrich_result
+            })
+        
+        query = enrich_result.get("rewritten_query", data.query)
+        
+        # 2. Intent
+        intent_result = _hybrid_intent.recognize(query)
+        needs_retrieve = intent_result.get("needs_retrieve", True)
+        
+        # 3. 不需要检索 → 直接生成
+        if not needs_retrieve:
+            from agent.llm import OpenRouterLLM
+            llm = OpenRouterLLM()
+            answer = llm.generate(
+                f"请回答以下问题：{query}",
+                system="你是一个通用的知识助手。"
+            )
+            return JSONResponse({
+                "status": "ok",
+                "answer": answer,
+                "pipeline": ["enrich", "intent", "generate_direct"],
+                "intent": intent_result
+            })
+        
+        # 4. Recall
+        strategies = data.strategies or ["standard"]
+        recall_results = _hybrid_recall.recall(
+            query,
+            strategies=strategies,
+            
+            k=data.k
+        )
+        
+        # 5. Fusion
+        fusion = Fusion(weights={"vector": 0.5, "fts": 0.3, "graph": 0.2})
+        fused = fusion.rrf(recall_results, top_k=data.k)
+        
+        # 6. Generate
+        from agent.llm import OpenRouterLLM
+        llm = OpenRouterLLM()
+        
+        if not fused:
+            answer = llm.generate(
+                f"请回答以下问题：{query}",
+                system="你是一个通用的知识助手。当前知识库中没有相关文档，请基于你的训练知识回答问题。"
+            )
+        else:
+            context = "\n\n".join([item.get("content", "") for item in fused])
+            prompt = f"""基于以下检索到的文档，回答用户问题。如果文档中没有相关信息，请基于你的知识回答。
+
+--- 检索到的文档 ---
+{context}
+
+--- 用户问题 ---
+{query}
+
+请给出清晰、准确的回答："""
+            answer = llm.generate(prompt, system="你是一个专业的知识助手，优先基于提供的文档回答问题。")
+        
+        return JSONResponse({
+            "status": "ok",
+            "answer": answer,
+            "pipeline": ["enrich", "intent", "recall", "fusion", "generate"],
+            "enrich": enrich_result,
+            "intent": intent_result,
+            "fused_count": len(fused),
+            "top_sources": [item.get("source") for item in fused[:3]]
+        })
+        
+    except Exception as e:
+        import traceback
+        return JSONResponse(
+            {"status": "error", "message": str(e), "traceback": traceback.format_exc()},
+            status_code=500
+        )
+
+
+# ========== LangGraph /runs/stream 流式接口（第十一章）==========
+
+from fastapi.responses import StreamingResponse
+
+
+class StreamRequest(BaseModel):
+    query: str
+    strategies: Optional[List[str]] = None
+    mode: Optional[str] = "hybrid"
+
+
+@app.post("/runs/stream")
+async def runs_stream(data: StreamRequest):
+    """第十一章：流式对话接口
+    
+    使用 LangGraph 执行 HybridRAG 链路，流式返回结果。
+    兼容前端现有调用方式。
+    """
+    from agent.graph import graph
+    from langchain_core.messages import HumanMessage
+    
+    async def event_generator():
+        try:
+            # 构建初始状态
+            initial_state = {
+                "messages": [HumanMessage(content=data.query)],
+                "question": data.query,
+                "enrich_complete": None,
+                "enrich_reason": None,
+                "enrich_rewritten": None,
+                "enrich_follow_up": None,
+                "intents": None,
+                "primary_intent": None,
+                "needs_retrieve": None,
+                "retrieve_strategies": data.strategies or ["standard"],
+                "retrieve_weights": None,
+                "retrieve_mode": data.mode or "hybrid",
+                "recall_results": None,
+                "fused_results": None,
+                "retrieved_docs": [],
+                "answer": None,
+                "retrieval_latency": 0
+            }
+            
+            # 流式执行
+            async for event in graph.astream_events(
+                initial_state,
+                version="v2",
+                config={"recursion_limit": 50}
+            ):
+                kind = event.get("event")
+                name = event.get("name", "")
+                data_evt = event.get("data", {})
+                
+                # 发送节点开始/结束事件
+                if kind in ("on_chain_start", "on_chain_end"):
+                    if name in ("enrich", "intent", "recall", "fusion", "hybrid_generate"):
+                        yield f"data: {json.dumps({'type': 'node', 'name': name, 'status': 'start' if kind == 'on_chain_start' else 'end'})}\n\n"
+                
+                # 发送生成结果
+                if kind == "on_chain_end" and name == "hybrid_generate":
+                    output = data_evt.get("output", {})
+                    answer = output.get("answer", "")
+                    if answer:
+                        yield f"data: {json.dumps({'type': 'answer', 'content': answer})}\n\n"
+            
+            # 结束标记
+            yield f"data: {json.dumps({'type': 'done'})}\n\n"
+            
+        except Exception as e:
+            import traceback
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e), 'traceback': traceback.format_exc()})}\n\n"
+    
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream"
+    )
+
