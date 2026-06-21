@@ -1,8 +1,8 @@
-# HybridRAG 文档上传与处理 SOP (v2.1 CLI 版)
+# HybridRAG 文档上传与处理 SOP (v2.2 向量质量版)
 
-> 版本: v2.1
+> 版本: v2.2
 > 适用阶段: HybridRAG 第二阶段（策略索引层 5.1-5.3）
-> 最后更新: 2026-06-21
+> 最后更新: 2026-06-22
 
 ---
 
@@ -65,10 +65,51 @@ cat backend/.env | grep -E "^(DEFAULT_MODEL|OPENROUTER_API_KEY)"
 
 ### 3.2 模型配置
 
+**.env 中配置（用于 summary/hypothetical 策略的 LLM 生成）**:
+
 ```bash
-# .env 中配置（用于 summary/hypothetical 策略的 LLM 生成）
 DEFAULT_MODEL=qwen/qwen3.5-flash-02-23
+OPENROUTER_API_KEY=sk-or-...
 ```
+
+### 3.3 嵌入模型配置（⚠️ 向量质量关键）
+
+**必须配置嵌入模型**，否则向量检索将使用假向量（FakeEmbeddings），导致语义搜索完全失效。
+
+```bash
+# .env 中配置（用于生成真实语义向量）
+EMBEDDING_PROVIDER=openrouter
+EMBEDDING_MODEL=nvidia/llama-nemotron-embed-vl-1b-v2:free
+```
+
+**验证配置生效**（索引前务必检查）：
+
+```bash
+cd RAG教学
+source backend/venv/bin/activate
+PYTHONPATH=backend/src python -c "
+from hybrid.channels.vector import VectorChannel
+vc = VectorChannel()
+print(type(vc.embedding).__name__)
+"
+```
+
+**预期输出**:
+```
+[VectorChannel] 使用 OpenRouter 嵌入: nvidia/llama-nemotron-embed-vl-1b-v2:free
+OpenRouterEmbeddings
+```
+
+**⚠️ 危险信号**（如果输出以下内容，说明向量为假）：
+```
+[VectorChannel] 使用 FakeEmbeddings（测试模式）
+FakeEmbeddings
+```
+
+**FakeEmbeddings 的危害**:
+- 向量由 MD5 哈希生成，无真实语义
+- 语义搜索（vector）完全失效，只能依赖关键词匹配（fts）
+- 不同文档的向量可能随机相似或相异，检索结果不可靠
 
 ---
 
@@ -97,9 +138,11 @@ PDF: docs/自指学口播文稿_第三版.pdf
 DB:  /home/ubuntu/.../backend/data/rag_data.db
 策略: standard,summary,parent_child,hypothetical
 模型: qwen/qwen3.5-flash-02-23
+嵌入模型: nvidia/llama-nemotron-embed-vl-1b-v2:free (OpenRouter)  ← 新增
 
 [1/4] 初始化组件...
   → DocumentStore, Vector, FTS, Graph 就绪
+  → Embedding: OpenRouterEmbeddings  ← 确认不是 FakeEmbeddings
 
 [2/4] 加载 PDF...
   → 10 页, 18500 字
@@ -199,7 +242,44 @@ HybridRAG 状态
 
 ---
 
-### 步骤 5: 检索测试
+### 步骤 5: 索引后向量质量检查（⚠️ 关键）
+
+索引完成后，**务必验证向量是否为真实嵌入**。如果向量为假（FakeEmbeddings），语义搜索将完全失效。
+
+**快速验证**:
+```bash
+PYTHONPATH=backend/src python -c "
+import chromadb, numpy as np
+from hybrid.config import DEFAULT_CHROMA_DIR
+client = chromadb.PersistentClient(path=DEFAULT_CHROMA_DIR)
+col = client.get_collection('hybrid_docs')
+data = col.get(include=['embeddings'], limit=5)
+arr = np.array(data['embeddings'])
+print(f'均值: {arr.mean():.4f}, 最小: {arr.min():.4f}, 最大: {arr.max():.4f}')
+if arr.mean() > 0.4 and arr.min() >= 0:
+    print('⚠️ 警告: 向量可能是 FakeEmbeddings（值全在0-1之间，均值~0.5）')
+else:
+    print('✅ 向量分布正常（真实嵌入）')
+"
+```
+
+**预期输出（真实嵌入）**:
+```
+均值: -0.0012, 最小: -0.8934, 最大: 0.9123
+✅ 向量分布正常（真实嵌入）
+```
+
+**危险信号（FakeEmbeddings）**:
+```
+均值: 0.4995, 最小: 0.0000, 最大: 0.9999
+⚠️ 警告: 向量可能是 FakeEmbeddings（值全在0-1之间，均值~0.5）
+```
+
+**处理**: 如果发现是 FakeEmbeddings，请检查 `.env` 中的 `EMBEDDING_PROVIDER` 和 `OPENROUTER_API_KEY` 配置，然后 `--reset` 重新索引。
+
+---
+
+### 步骤 6: 检索测试
 
 ```bash
 # 全部策略检索
@@ -328,6 +408,44 @@ parent_child: ['vector', 'fts']
 hypothetical: ['vector']
 ```
 
+### 6.6 向量为 FakeEmbeddings（⚠️ 严重）
+
+**现象**: `VectorChannel` 初始化时输出 `[VectorChannel] 使用 FakeEmbeddings（测试模式）`，索引后语义搜索失效。
+
+**原因**: `OpenRouterEmbeddings` 初始化失败，静默 fallback 到 `FakeEmbeddings`。
+
+**可能原因**:
+1. `.env` 中 `EMBEDDING_PROVIDER` 或 `EMBEDDING_MODEL` 未配置
+2. `.env` 中 `OPENROUTER_API_KEY` 缺失或过期
+3. `VectorChannel` 初始化时 `.env` 文件尚未加载
+
+**处理**:
+```bash
+# 1. 检查 .env 配置
+cat backend/.env | grep -E "^(EMBEDDING|OPENROUTER)"
+
+# 预期输出:
+# EMBEDDING_PROVIDER=openrouter
+# EMBEDDING_MODEL=nvidia/llama-nemotron-embed-vl-1b-v2:free
+# OPENROUTER_API_KEY=sk-or-...
+
+# 2. 验证配置生效
+PYTHONPATH=backend/src python -c "
+from hybrid.channels.vector import VectorChannel
+vc = VectorChannel()
+print(type(vc.embedding).__name__)
+"
+# 预期输出: OpenRouterEmbeddings
+
+# 3. 如果仍为 FakeEmbeddings，重置后重新索引
+PYTHONPATH=backend/src python -m hybrid.cli index docs/文档.pdf --reset
+```
+
+**FakeEmbeddings 回退机制说明**:
+- 代码设计：当 `OpenRouterEmbeddings` 初始化失败时，自动回退到 `FakeEmbeddings`，保证系统可用
+- 风险：FakeEmbeddings 基于 MD5 哈希生成，无真实语义，仅适合测试环境
+- 生产环境：必须配置有效的 `OPENROUTER_API_KEY` 和嵌入模型
+
 ---
 
 ## 七、数据表结构速查
@@ -407,6 +525,11 @@ PYTHONPATH=backend/src python -m hybrid.cli search <query> [options]
 
 | 日期 | 版本 | 变更内容 |
 |------|------|---------|
+| 2026-06-22 | v2.2 | 新增嵌入模型配置检查（3.3节） |
+| | | 新增索引后向量质量检查步骤（步骤5） |
+| | | 新增 FakeEmbeddings 排查（6.6节） |
+| | | CLI 输出示例增加嵌入模型信息 |
+| | | 强调向量真实性对语义搜索的关键影响 |
 | 2026-06-21 | v2.1 | 修复 CLI 路径解析，支持从项目根目录执行 |
 | | | 修正 `PROJECT_ROOT` 和 `DEFAULT_DB` 路径计算 |
 | | | 新增 `_resolve_pdf_path` 智能路径解析 |
