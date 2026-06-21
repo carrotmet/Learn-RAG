@@ -5,6 +5,8 @@ from typing import List, Dict
 from langchain_core.documents import Document
 from langchain_community.vectorstores import Chroma
 
+from hybrid.config import DEFAULT_CHROMA_DIR
+
 
 class VectorChannel:
     """向量检索通道
@@ -14,8 +16,7 @@ class VectorChannel:
 
     def __init__(self, persist_dir: str = None, collection_name: str = "hybrid_docs"):
         if persist_dir is None:
-            base = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-            persist_dir = os.path.join(base, "chroma_db_hybrid")
+            persist_dir = DEFAULT_CHROMA_DIR
         
         self.persist_dir = persist_dir
         self.collection_name = collection_name

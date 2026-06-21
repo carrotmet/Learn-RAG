@@ -15,6 +15,8 @@ from collections import Counter
 from typing import List, Dict, Set
 import networkx as nx
 
+from hybrid.config import DEFAULT_GRAPH_PATH
+
 
 class GraphChannel:
     """图谱检索通道
@@ -30,8 +32,7 @@ class GraphChannel:
 
     def __init__(self, path: str = None):
         if path is None:
-            base = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-            path = os.path.join(base, "data", "knowledge_graph.pkl")
+            path = DEFAULT_GRAPH_PATH
         self.path = path
         self.G = self._load()
 

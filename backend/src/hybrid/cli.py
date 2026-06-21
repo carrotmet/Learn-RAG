@@ -82,36 +82,47 @@ def _load_pdf(path: str):
 
 
 def _init_components(db_path: str):
-    """初始化存储和通道（按需调用，避免导入时初始化）"""
+    """初始化存储和通道（所有组件使用统一的数据目录）"""
     from hybrid.document_store import DocumentStore
     from hybrid.channels.vector import VectorChannel
     from hybrid.channels.fts import FTSChannel
     from hybrid.channels.graph import GraphChannel
+    from hybrid.config import DEFAULT_CHROMA_DIR, DEFAULT_GRAPH_PATH
 
     store = DocumentStore(db_path=db_path, chunk_size=2000, chunk_overlap=200)
-    vector = VectorChannel()
+
+    # 基于 db_path 推导向量/图谱路径，确保与 SQLite 在同一目录
+    data_dir = os.path.dirname(db_path)
+    vector_dir = os.path.join(data_dir, "chroma_db_hybrid")
+    graph_path = os.path.join(data_dir, "knowledge_graph.pkl")
+
+    vector = VectorChannel(persist_dir=vector_dir)
     fts = FTSChannel(db_path=db_path)
-    graph = GraphChannel()
+    graph = GraphChannel(path=graph_path)
     return store, vector, fts, graph
 
 
 def _reset_data(db_path: str):
-    """重置所有数据"""
+    """重置所有数据（SQLite + ChromaDB + Graph）"""
     import shutil
 
     print("[准备] 重置数据...")
+
+    data_dir = os.path.dirname(db_path)
+    vector_dir = os.path.join(data_dir, "chroma_db_hybrid")
+    graph_path = os.path.join(data_dir, "knowledge_graph.pkl")
+
+    # 删除 SQLite
     if os.path.exists(db_path):
         os.remove(db_path)
         print(f"  → 删除数据库: {db_path}")
 
     # 清理 ChromaDB
-    chroma_dir = os.path.join(os.path.dirname(db_path), "chroma_db")
-    if os.path.exists(chroma_dir):
-        shutil.rmtree(chroma_dir)
-        print(f"  → 清空 ChromaDB: {chroma_dir}")
+    if os.path.exists(vector_dir):
+        shutil.rmtree(vector_dir)
+        print(f"  → 清空 ChromaDB: {vector_dir}")
 
     # 清理 Graph
-    graph_path = os.path.join(os.path.dirname(db_path), "knowledge_graph.pkl")
     if os.path.exists(graph_path):
         os.remove(graph_path)
         print(f"  → 清空 Graph: {graph_path}")

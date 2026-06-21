@@ -14,6 +14,8 @@ from dataclasses import dataclass
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
+from hybrid.config import DEFAULT_DB_PATH
+
 
 @dataclass
 class Chunk:
@@ -60,9 +62,7 @@ class DocumentStore:
 
     def __init__(self, db_path: str = None, chunk_size: int = 2000, chunk_overlap: int = 200):
         if db_path is None:
-            # 默认使用项目 data 目录
-            base = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-            db_path = os.path.join(base, "data", "rag_data.db")
+            db_path = DEFAULT_DB_PATH
         self.db_path = db_path
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap

@@ -1,7 +1,10 @@
 """全文通道：基于 SQLite FTS5"""
 
+import os
 import sqlite3
 from typing import List, Dict
+
+from hybrid.config import DEFAULT_DB_PATH
 
 
 class FTSChannel:
@@ -13,9 +16,7 @@ class FTSChannel:
 
     def __init__(self, db_path: str = None):
         if db_path is None:
-            import os
-            base = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-            db_path = os.path.join(base, "data", "rag_data.db")
+            db_path = DEFAULT_DB_PATH
         self.db_path = db_path
         self._ensure_table()
 
