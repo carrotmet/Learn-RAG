@@ -2,6 +2,13 @@ from openai import OpenAI, RateLimitError, APIError, NotFoundError
 import os
 import time
 
+# 加载 .env 文件（如果存在）
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 
 class OpenRouterLLM:
     """通过 OpenRouter 统一路由所有 LLM 调用，支持多模型自动轮询"""
